@@ -2,11 +2,9 @@
 title: "HW3"
 author: "Haoran Zhang"
 date: "2021/11/3"
-output:
-  html_document: 
-    keep_md: yes
-    html_preview: false
-  github_document:
+output: 
+  - html_document
+  - github_document
 always_allow_html: true
 ---
 
