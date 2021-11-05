@@ -1,0 +1,239 @@
+---
+title: "HW3"
+author: "Haoran Zhang"
+date: "2021/11/3"
+output: 
+  html_document: 
+    keep_md: yes
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+```{r warning=FALSE}
+library(httr)
+library(rvest)
+library(xml2)
+library(data.table)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(tidytext)
+library(tidyverse)
+```
+
+## APIs
+1. Using the NCBI API, look for papers that show up under the term “sars-cov-2 trial vaccine.” Look for the data in the pubmed database, and then retrieve the details of the paper as shown in lab 7. How many papers were you able to find?
+```{r}
+# Downloading the website
+website <- xml2::read_html("https://pubmed.ncbi.nlm.nih.gov/?term=sars-cov-2+trial+vaccine")
+# Finding the counts
+counts <- xml2::xml_find_first(website, "/html/body/main/div[9]/div[2]/div[2]/div[1]/div[1]/span")
+# Turning it into text
+counts <- as.character(counts)
+# Extracting the data using regex
+stringr::str_extract(counts, "[0-9,]+")
+stringr::str_extract(counts, "[[:digit:],]+")
+stringr::str_replace(counts, "[^[:digit:]]+([[:digit:]]+),([[:digit:]]+)[^[:digit:]]+", "\\1\\2")
+```
+
+2. Using the list of pubmed ids you retrieved, download each papers’ details using the query parameter rettype = abstract. If you get more than 250 ids, just keep the first 250.
+
+```{r}
+query_ids <- GET(
+  url   = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+  query = list(
+    db = "pubmed",
+    term = "sars-cov-2 trial vaccine",
+    retmax = 250)
+)
+
+GET(
+  url   = "https://eutils.ncbi.nlm.nih.gov/",
+  path  = "entrez/eutils/esearch.fcgi",
+  query = list(
+    db     = "pubmed",
+    term   = "sars-cov-2 trial vaccine",
+    retmax = 250
+    )
+)
+
+# Extracting the content of the response of GET
+ids <- httr::content(query_ids)
+```
+
+3. Get details about the articles
+```{r}
+# Turn the result into a character vector
+ids <- as.character(ids)
+# Find all the ids 
+ids <- stringr::str_extract_all(ids, "<Id>[[:digit:]]+</Id>")[[1]]
+# Remove all the leading and trailing <Id> </Id>. Make use of "|"
+# stringr::str_remove_all(ids, "</?Id>")
+ids <- stringr::str_remove_all(ids, "<Id>|</Id>")
+```
+
+```{r}
+publications <- GET(
+  url   = "https://eutils.ncbi.nlm.nih.gov/",
+  path  = "entrez/eutils/efetch.fcgi",
+  query = list(
+    db = "pubmed",
+    id = I(paste(ids, collapse=",")),
+    retmax = 250,
+    rettype = "abstract"
+    )
+)
+# Turning the output into character vector
+publications <- httr::content(publications)
+publications_txt <- as.character(publications)
+```
+As we did in lab 7. Create a dataset containing the following:
+
+Pubmed ID number,
+Title of the paper,
+Name of the journal where it was published,
+Publication date, and
+Abstract of the paper (if any).
+```{r}
+pub_char_list <- xml_children(publications)
+pub_char_list <- sapply(pub_char_list, as.character)
+# abstracts <- str_extract(pub_char_list, "<Abstract>[[:alnum:].%<>/&|=+-]+</Abstract>")
+abstracts <- str_extract(pub_char_list, "<Abstract>[[:print:][:space:]]+</Abstract>")
+abstracts <- str_remove_all(abstracts, "</?[[:alnum:]- =\"]+.")
+abstracts <- str_replace_all(abstracts, "[[:space:]]+", " ")
+
+titles <- str_extract(pub_char_list, "<ArticleTitle>[[:print:][:space:]]+</ArticleTitle>")
+titles <- str_remove_all(titles, "</?[[:alnum:]- =\"]+>")
+
+journals <- str_extract(pub_char_list, "<Title>[[:print:][:space:]]+</Title>")
+journals <- str_remove_all(journals, "</?[[:alnum:]- =\"]+>")
+
+#dates <- str_extract(pub_char_list, "<PubDate>[[:print:][:space:]]+</PubDate>")
+dates <- str_extract(pub_char_list, "<PubDate>[[:print:][:space:]]+</PubDate>")
+dates <- str_remove_all(dates, "</?[[:alnum:]]+>")
+dates <- str_replace_all(dates, "\\s+", " ")
+database <- data.frame(
+  PubMedId = ids,
+  Title    = titles,
+  Journal  = journals,
+  Date     = dates,
+  Abstract = abstracts
+)
+knitr::kable(database[1:10,], caption = "Papers about COVID-19 Vaccine")
+```
+## Test Mining
+
+
+```{r}
+pubmed <-"pubmed.csv"
+if(!file.exists(pubmed))
+  download.file("https://raw.githubusercontent.com/USCbiostats/data-science-data/master/03_pubmed/pubmed.csv",destfile = pubmed)
+pubmed<-read.csv("pubmed.csv")
+```
+## 1. Tokenize the abstracts and count the number of each token. Do you see anything interesting? Does removing stop words change what tokens appear as the most frequent? What are the 5 most common tokens for each search term after removing stopwords?
+```{r}
+tokabs<-pubmed %>%
+  unnest_tokens(token, abstract) %>%
+  count(token) %>%
+  top_n(5,n)
+tokabs
+```
+The top five frequent tokens are all preposition words.
+```{r}
+pubmed %>%
+  unnest_tokens(output = word, input = abstract) %>%
+  count(word,sort=TRUE)%>%
+  anti_join(stop_words,by="word") %>%
+  ## filter(!grepl(pattern = "^[0-9]+$", x = word))%>%
+  top_n(5,n) 
+```
+After remove stop words, the top five frequent tokens all relate to disease.
+
+Now we will find out the five most frequent tokens with search terms "covid", "cystic fibrosis", "meningitis", "preeclampsia" and "prostate cancer".
+```{r}
+pubmed %>%
+  filter(term=="covid")%>%
+  unnest_tokens(output = token,input = abstract) %>%
+  count(token, sort = TRUE) %>%
+  anti_join(stop_words, by = c("token" = "word")) %>%
+  top_n(5,n) %>%
+  knitr::kable(caption = "Frequent Tokens with covid")
+```
+```{r}
+pubmed %>%
+  filter(term=="cystic fibrosis")%>%
+  unnest_tokens(output = token,input = abstract) %>%
+  count(token, sort = TRUE) %>%
+  anti_join(stop_words, by = c("token" = "word")) %>%
+  top_n(5,n) %>%
+  knitr::kable(caption = "Frequent Tokens with cystic fibrosis")
+```
+```{r}
+pubmed %>%
+  filter(term=="meningitis")%>%
+  unnest_tokens(output = token,input = abstract) %>%
+  count(token, sort = TRUE) %>%
+  anti_join(stop_words, by = c("token" = "word")) %>%
+  top_n(5,n) %>%
+  knitr::kable(caption = "Frequent Tokens with meningitis")
+```
+```{r}
+pubmed %>%
+  filter(term=="preeclampsia")%>%
+  unnest_tokens(output = token,input = abstract) %>%
+  count(token, sort = TRUE) %>%
+  anti_join(stop_words, by = c("token" = "word")) %>%
+  top_n(5,n) %>%
+  knitr::kable(caption = "Frequent Tokens with preeclampsia")
+```
+```{r}
+pubmed %>%
+  filter(term=="prostate cancer")%>%
+  unnest_tokens(output = token,input = abstract) %>%
+  count(token, sort = TRUE) %>%
+  anti_join(stop_words, by = c("token" = "word")) %>%
+  top_n(5,n) %>%
+  knitr::kable(caption = "Frequent Tokens with prostate cancer")
+```
+## 2. Tokenize the abstracts into bigrams. Find the 10 most common bigram and visualize them with ggplot2.
+Bi-grams
+```{r bi-count}
+bigabs<-pubmed %>%
+  unnest_ngrams(bigram, abstract, n = 2) %>%
+  count(bigram, sort = TRUE) %>%
+  top_n(10,n)
+bigabs
+```
+Plot
+```{r bigram-plot}
+bigabs %>%
+  ggplot(aes(n, fct_reorder(bigram, n))) +
+  geom_col()
+```
+## 3. Calculate the TF-IDF value for each word-search term combination.
+```{r}
+pubmed %>%
+  unnest_tokens(word, abstract) %>%
+  count(word, term) %>%
+  bind_tf_idf(word, term, n) %>%
+  group_by(term) %>%
+  arrange(desc(tf_idf), .by_group=TRUE) %>%
+  top_n(5,tf_idf) %>%
+  knitr::kable()
+```
+
+## Conclusion: 
+Only "prostate" is listed in the most frequent tokens with "prostate cancer".   
+
+"eclampsia", "preeclampsia" and "pregnancy" are the most frequent tokens of "preeclampsia".   
+
+"meningitis", "meningeal" and "csf" are the most frequent tokens of "meningitis".  
+
+"cf", "fibrosis" and "cystic" are the most frequent tokens of "cystic fibrosis".  
+
+"covid" and "pandemic" are the most frequent tokens of "covid".
+
+
+
